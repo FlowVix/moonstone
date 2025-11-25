@@ -95,17 +95,6 @@ impl<'a, T: View> DerefMut for ViewValueMut<'a, T> {
         &mut self.inner.value
     }
 }
-// impl<T: View> ViewValueRef<T> {
-//     pub(crate) fn upgrade(&self) -> Option<ViewValue<T>> {
-//         self.inner.upgrade().map(|v| ViewValue { inner: v })
-//     }
-//     pub fn with<R>(&self, cb: impl FnOnce(&T) -> R) -> Option<R> {
-//         self.upgrade().map(|v| v.with(cb))
-//     }
-//     pub fn update<R>(&self, cb: impl FnOnce(&mut T) -> R) -> Option<R> {
-//         self.upgrade().map(|v| v.update(cb))
-//     }
-// }
 
 impl<T: Inherits<Node>> View for Gd<T> {
     type State = Gd<T>;
