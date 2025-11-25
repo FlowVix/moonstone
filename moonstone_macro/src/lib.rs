@@ -2,7 +2,8 @@ use heck::ToUpperCamelCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, Data, DeriveInput, Fields, ItemStruct, Lit, LitInt, Meta, MetaNameValue, Token,
+    Attribute, Data, DeriveInput, Field, Fields, ItemStruct, Lit, LitInt, Meta, MetaNameValue,
+    Token,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
@@ -55,9 +56,9 @@ pub fn view(args: TokenStream, input: TokenStream) -> TokenStream {
             .find(|v| v.path().is_ident("enter"))
             .map(|v| {
                 v.parse_args_with(|i: ParseStream| {
-                    Punctuated::<syn::Path, Token![,]>::parse_terminated(i)
+                    Punctuated::<Field, Token![,]>::parse_terminated_with(i, Field::parse_named)
                 })
-                .expect("`enter` argument must be a list of paths")
+                .expect("`enter` argument must be a list of fields")
             });
         let exit = field
             .attrs
@@ -68,31 +69,36 @@ pub fn view(args: TokenStream, input: TokenStream) -> TokenStream {
                     .expect("`exit` argument must be an integer")
             });
 
-        init_struct_fields.extend(quote! { #vis #name: #typ, });
-
         if is_view {
-            view_struct_fields.extend(quote! { #vis #name: ::moonstone::ViewValue<#typ>, });
-
             if let Some(exit) = exit {
                 for _ in 0..exit.base10_parse::<u32>().unwrap() {
                     build_view_values.extend(quote! {
-                        let mut parent = parent.get_parent().unwrap();
+                        let mut __parent = __parent.get_parent().unwrap();
                     });
                 }
             }
             if let Some(enter) = enter {
-                for i in enter {
+                for field in enter {
+                    let vis = &field.vis;
+                    let name = &field.ident.unwrap();
+                    let typ = &field.ty;
+                    init_struct_fields.extend(quote! { #vis #name: ::godot::obj::Gd<#typ>, });
+                    view_struct_fields.extend(quote! { #vis #name: ::godot::obj::Gd<#typ>, });
                     build_view_values.extend(quote! {
-                        let n = #i::new_alloc();
-                        parent.add_child(&n);
-                        let mut parent = n;
+                        __parent.add_child(&self.#name);
+                        let mut __parent = self.#name.clone();
+                    });
+                    build_fields.extend(quote! {
+                        #name: self.#name,
                     });
                 }
             }
+            init_struct_fields.extend(quote! { #vis #name: #typ, });
+            view_struct_fields.extend(quote! { #vis #name: ::moonstone::ViewValue<#typ>, });
 
             build_view_values.extend(quote! {
-                let state = <#typ as ::moonstone::View>::build(&self.#name, parent.clone().upcast(), ::moonstone::AnchorType::ChildOf);
-                let #name = ::moonstone::ViewValue::create(self.#name, state);
+                let __state = <#typ as ::moonstone::View>::build(&self.#name, __parent.clone().upcast(), ::moonstone::AnchorType::ChildOf);
+                let #name = ::moonstone::ViewValue::create(self.#name, __state);
             });
             build_fields.extend(quote! {
                 #name,
@@ -101,6 +107,7 @@ pub fn view(args: TokenStream, input: TokenStream) -> TokenStream {
                 <#typ as ::moonstone::View>::message(&mut self.#name.__value, msg, &mut self.#name.__state);
             });
         } else {
+            init_struct_fields.extend(quote! { #vis #name: #typ, });
             view_struct_fields.extend(quote! { #vis #name: #typ, });
             build_fields.extend(quote! {
                 #name: self.#name,
@@ -141,10 +148,10 @@ pub fn view(args: TokenStream, input: TokenStream) -> TokenStream {
                 #init_struct_fields
             }
             impl #view_struct_name {
-                pub fn borrow(&self) -> Ref<#struct_name> {
+                fn borrow(&self) -> Ref<#struct_name> {
                     self.inner.borrow()
                 }
-                pub fn borrow_mut(&self) -> RefMut<#struct_name> {
+                fn borrow_mut(&self) -> RefMut<#struct_name> {
                     self.inner.borrow_mut()
                 }
                 pub fn with<R>(&self, f: impl FnOnce(&#struct_name) -> R) -> R {
@@ -177,7 +184,7 @@ pub fn view(args: TokenStream, input: TokenStream) -> TokenStream {
                 pub fn build(self) -> #view_struct_name {
                     use ::godot::obj::NewAlloc;
                     let base = #base_type::new_alloc();
-                    let mut parent = base.clone();
+                    let mut __parent = base.clone();
                     #build_view_values
                     let inner = Rc::new(RefCell::new(#struct_name {
                         base,
