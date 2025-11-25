@@ -1,16 +1,8 @@
 use godot::{
     classes::{Button, PanelContainer, VBoxContainer},
-    obj::Gd,
+    obj::{Gd, WithBaseField},
 };
 use moonstone::{CustomView, ViewValue, viewtype};
-
-// #[view(base = PanelContainer, msg = ())]
-// struct Bar {
-//     pub a: i32,
-//     #[view]
-//     #[enter(lol: VBoxContainer)]
-//     pub b: godot::obj::Gd<Button>,
-// }
 
 viewtype! {
     struct Bar: PanelContainer {

@@ -167,8 +167,6 @@ impl ViewDef {
 
                 let mod_name = format_ident!("_def_{}", name);
                 let init_struct_name = format_ident!("{}_Init", name);
-                let view_struct_name = format_ident!("{}_View", name);
-                let weak_struct_name = format_ident!("{}_Weak", name);
                 let DataCollect {
                     init_struct_fields,
                     view_struct_fields,
@@ -178,22 +176,10 @@ impl ViewDef {
 
                 quote! {
 
-                    #[allow(non_camel_case_types)]
-                    #vis struct #view_struct_name {
-                        #[doc(hidden)]
-                        __inner: std::rc::Rc<std::cell::RefCell<#name>>,
-                    }
-                    #[allow(non_camel_case_types)]
-                    #[derive(Clone)]
-                    #vis struct #weak_struct_name {
-                        #[doc(hidden)]
-                        __inner: std::rc::Weak<std::cell::RefCell<#name>>,
-                    }
+                    #[derive(::godot::prelude::GodotClass)]
+                    #[class(base=#base_type, no_init)]
                     #vis struct #name {
-                        #[doc(hidden)]
-                        __base: ::godot::obj::Gd<#base_type>,
-                        #[doc(hidden)]
-                        __weak: #weak_struct_name,
+                        base: ::godot::obj::Base<#base_type>,
                         #view_struct_fields
                     }
                     #[allow(non_camel_case_types)]
@@ -209,98 +195,20 @@ impl ViewDef {
                         use std::cell::{RefCell, Ref, RefMut};
 
 
-                        impl #view_struct_name {
-                            fn borrow(&self) -> Ref<#name> {
-                                self.__inner.borrow()
-                            }
-                            fn borrow_mut(&self) -> RefMut<#name> {
-                                self.__inner.borrow_mut()
-                            }
-                            pub fn with<R>(&self, f: impl FnOnce(&#name) -> R) -> R {
-                                f(&*self.__inner.borrow())
-                            }
-                            pub fn update<R>(&self, f: impl FnOnce(&mut #name) -> R) -> R {
-                                let out = f(&mut *self.__inner.borrow_mut());
-                                <#name as ::moonstone::CustomView>::sync(&mut *self.borrow_mut());
-                                out
-                            }
-                        }
-                        impl #weak_struct_name {
-                            pub fn with<R>(&self, f: impl FnOnce(&#name) -> R) -> Option<R> {
-                                self.__inner.upgrade().map(|v| f(&*v.borrow()))
-                            }
-                            pub fn update<R>(&self, f: impl FnOnce(&mut #name) -> R) -> Option<R> {
-                                self.__inner.upgrade().map(|v| {
-                                    let out = f(&mut *v.borrow_mut());
-                                    <#name as ::moonstone::CustomView>::sync(&mut *v.borrow_mut());
-                                    out
-                                })
-                            }
-                        }
-                        impl #name {
-                            pub fn weak(&self) -> #weak_struct_name {
-                                self.__weak.clone()
-                            }
-                        }
                         impl #init_struct_name {
-                            pub fn build(self) -> #view_struct_name {
+                            pub fn build(self) -> ::godot::obj::Gd<#name> {
                                 use ::godot::obj::NewAlloc;
-                                let __base = #base_type::new_alloc();
-                                let mut __parent = __base.clone();
-                                #build_view_values
-                                let __inner = Rc::new(RefCell::new(#name {
-                                    __base,
-                                    __weak: #weak_struct_name {
-                                        __inner: Weak::new(),
-                                    },
-                                    #build_fields
-                                }));
-                                let __weak = Rc::downgrade(&__inner);
-                                __inner.borrow_mut().__weak.__inner = __weak;
-                                let mut out = #view_struct_name {
-                                    __inner,
-                                };
-                                <#name as ::moonstone::CustomView>::init(&mut *out.borrow_mut());
-                                <#name as ::moonstone::CustomView>::sync(&mut *out.borrow_mut());
+                                let out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base_type>| {
+                                    let mut __parent = __base.to_init_gd();
+                                    #build_view_values
+                                    #name {
+                                        base: __base,
+                                        #build_fields
+                                    }
+                                });
+                                // <#name as ::moonstone::CustomView>::init(&mut *out.borrow_mut());
+                                // <#name as ::moonstone::CustomView>::sync(&mut *out.borrow_mut());
                                 out
-                            }
-                        }
-                        impl ::moonstone::View for #view_struct_name {
-                            type State = ::godot::obj::Gd<#base_type>;
-
-                            fn build(
-                                &self,
-                                mut parent_anchor: ::godot::obj::Gd<godot::prelude::Node>,
-                                parent_anchor_type: ::moonstone::AnchorType,
-                            ) -> ::moonstone::ViewState<Self> {
-                                let base = self.borrow().__base.clone();
-                                parent_anchor_type.add(&mut parent_anchor, &base.clone().upcast());
-                                ::moonstone::ViewState {
-                                    state: base,
-                                    parent_anchor: parent_anchor,
-                                    parent_anchor_type: parent_anchor_type,
-                                }
-                            }
-
-                            fn rebuild(&self, state: &mut ::moonstone::ViewState<Self>) {
-                                let base = self.borrow().__base.clone();
-                                if base.upcast_ref::<::godot::classes::Node>().get_parent() != state.state.upcast_ref::<::godot::classes::Node>().get_parent() {
-                                    state.state.upcast_mut::<::godot::classes::Node>().queue_free();
-                                    state.state.clone().upcast_mut::<::godot::classes::Node>().replace_by(&base);
-                                    state.state = base.clone();
-                                }
-                            }
-
-                            fn teardown(state: &mut ::moonstone::ViewState<Self>) {
-                                let mut node = state.state.clone().upcast::<::godot::classes::Node>();
-                                state
-                                    .parent_anchor_type
-                                    .remove(&mut state.parent_anchor, &node);
-                                node.queue_free();
-                            }
-
-                            fn collect_nodes(state: &::moonstone::ViewState<Self>, nodes: &mut Vec<::godot::obj::Gd<::godot::classes::Node>>) {
-                                nodes.push(state.state.clone().upcast());
                             }
                         }
                     }
