@@ -14,16 +14,24 @@ mod kw {
 
 pub struct ViewDef {
     vis: Visibility,
-    base: Type,
     typ: ViewType,
 }
 pub enum ViewType {
     Struct {
         name: Ident,
+        base: Type,
         body: Punctuated<ViewField, Token![,]>,
+    },
+    Enum {
+        name: Ident,
+        variants: Punctuated<ViewVariant, Token![,]>,
     },
 }
 
+pub struct ViewVariant {
+    name: Ident,
+    typ: Type,
+}
 pub struct ViewField {
     vis: Visibility,
     view: Option<kw::view>,
@@ -45,12 +53,31 @@ impl Parse for ViewDef {
             let body = Punctuated::parse_terminated(&inner)?;
             Ok(ViewDef {
                 vis,
-                base,
-                typ: ViewType::Struct { name, body },
+                typ: ViewType::Struct { name, base, body },
+            })
+        } else if input.peek(Token![enum]) {
+            input.parse::<Token![enum]>()?;
+            let name = input.parse()?;
+            let inner;
+            braced!(inner in input);
+            let variants = Punctuated::parse_terminated(&inner)?;
+            Ok(ViewDef {
+                vis,
+                typ: ViewType::Enum { name, variants },
             })
         } else {
             panic!("Struct or enum bro")
         }
+    }
+}
+
+impl Parse for ViewVariant {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let name = input.parse()?;
+        let inner;
+        parenthesized!(inner in input);
+        let typ = inner.parse()?;
+        Ok(ViewVariant { name, typ })
     }
 }
 
@@ -152,10 +179,9 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
 
 impl ViewDef {
     pub fn gen_rust(&self) -> TokenStream {
-        let base_type = &self.base;
         let vis = &self.vis;
         match &self.typ {
-            ViewType::Struct { name, body } => {
+            ViewType::Struct { name, base, body } => {
                 let mut collect = DataCollect {
                     init_struct_fields: quote! {},
                     view_struct_fields: quote! {},
@@ -177,9 +203,9 @@ impl ViewDef {
                 quote! {
 
                     #[derive(::godot::prelude::GodotClass)]
-                    #[class(base=#base_type, no_init)]
+                    #[class(base=#base, no_init)]
                     #vis struct #name {
-                        base: ::godot::obj::Base<#base_type>,
+                        base: ::godot::obj::Base<#base>,
                         #view_struct_fields
                     }
                     #[allow(non_camel_case_types)]
@@ -198,7 +224,7 @@ impl ViewDef {
                         impl #init_struct_name {
                             pub fn build(self) -> ::godot::obj::Gd<#name> {
                                 use ::godot::obj::NewAlloc;
-                                let out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base_type>| {
+                                let out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base>| {
                                     let mut __parent = __base.to_init_gd();
                                     #build_view_values
                                     #name {
@@ -209,6 +235,108 @@ impl ViewDef {
                                 // <#name as ::moonstone::CustomView>::init(&mut *out.borrow_mut());
                                 // <#name as ::moonstone::CustomView>::sync(&mut *out.borrow_mut());
                                 out
+                            }
+                        }
+                    }
+                }
+            }
+            ViewType::Enum { name, variants } => {
+                let view_state_name = format_ident!("__{}_ViewStateType", name);
+
+                let mut variant_gen = quote! {};
+                let mut view_state_variant_gen = quote! {};
+                let mut build_match = quote! {};
+                let mut rebuild_match = quote! {};
+                let mut teardown_match = quote! {};
+                let mut collect_match = quote! {};
+                for i in variants {
+                    let variant = &i.name;
+                    let typ = &i.typ;
+                    variant_gen.extend(quote! { #variant(#typ), });
+                    view_state_variant_gen
+                        .extend(quote! { #variant(::moonstone::ViewState<#typ>), });
+                    build_match.extend(quote! {
+                        #name::#variant(v) => #view_state_name::#variant(v.build(enum_anchor.clone(), ::moonstone::AnchorType::Before)),
+                    });
+                    rebuild_match.extend(quote! {
+                        (#name::#variant(new), #view_state_name::#variant(inner_state)) => {
+                            new.rebuild(inner_state);
+                            return;
+                        },
+                    });
+                    teardown_match.extend(quote! {
+                        #view_state_name::#variant(inner_state) => {
+                            ::moonstone::View::teardown(inner_state);
+                        },
+                    });
+                    collect_match.extend(quote! {
+                        #view_state_name::#variant(inner_state) => {
+                            ::moonstone::View::collect_nodes(inner_state, nodes);
+                        },
+                    });
+                }
+                quote! {
+                    #vis enum #name {
+                        #variant_gen
+                    }
+                    #[allow(non_camel_case_types)]
+                    enum #view_state_name {
+                        #view_state_variant_gen
+                    }
+                    impl ::moonstone::View for #name {
+                        type State = (::godot::obj::Gd<::godot::classes::Node>, #view_state_name);
+
+                        fn build(
+                            &self,
+                            mut parent_anchor: ::godot::obj::Gd<::godot::classes::Node>,
+                            parent_anchor_type: ::moonstone::AnchorType,
+                        ) -> ::moonstone::ViewState<Self> {
+                            let enum_anchor = <::godot::classes::Node as ::godot::obj::NewAlloc>::new_alloc();
+                            parent_anchor_type.add(&mut parent_anchor, &enum_anchor);
+
+                            let inner_state = match self {
+                                #build_match
+                            };
+
+                            ::moonstone::ViewState {
+                                state: (
+                                    enum_anchor,
+                                    inner_state,
+                                ),
+                                parent_anchor,
+                                parent_anchor_type,
+                            }
+                        }
+
+                        fn rebuild(&self, state: &mut ::moonstone::ViewState<Self>) {
+                            let enum_anchor = state.state.0.clone();
+                            match (self, &mut state.state.1) {
+                                #rebuild_match
+                                _ => {}
+                            }
+                            match &mut state.state.1 {
+                                #teardown_match
+                            }
+                            let inner_state = match self {
+                                #build_match
+                            };
+                            state.state.1 = inner_state;
+                        }
+
+                        fn teardown(state: &mut ::moonstone::ViewState<Self>) {
+                            match &mut state.state.1 {
+                                #teardown_match
+                            }
+                            state
+                                .parent_anchor_type
+                                .remove(&mut state.parent_anchor, &state.state.0);
+                            state.state.0.queue_free();
+                        }
+
+                        fn collect_nodes(state: &::moonstone::ViewState<Self>, nodes: &mut Vec<::godot::obj::Gd<::godot::classes::Node>>) {
+                            nodes.push(state.state.0.clone());
+                            match &state.state.1 {
+                                #collect_match
                             }
                         }
                     }

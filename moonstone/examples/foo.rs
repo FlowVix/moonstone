@@ -1,15 +1,20 @@
 use godot::{
-    classes::{Button, PanelContainer, VBoxContainer},
+    classes::{Button, LineEdit, PanelContainer, VBoxContainer},
     obj::{Gd, WithBaseField},
 };
 use moonstone::{CustomView, ViewValue, viewtype};
 
 viewtype! {
-    struct Bar: PanelContainer {
-        a: i32,
-        pub(crate) b: VBoxContainer {
-            pub view c: Option<Gd<Button>>,
-        }
+    enum Guy {
+        Foo(Gd<Button>),
+        Bar(Gd<LineEdit>),
+    }
+}
+
+viewtype! {
+    struct Bar: VBoxContainer {
+        view switch: Gd<Button>,
+        view guy: Guy,
     }
 }
 
