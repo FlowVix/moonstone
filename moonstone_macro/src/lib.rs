@@ -13,10 +13,6 @@ use syn::{
 
 use crate::viewtype::ViewDef;
 
-fn parse_args(input: ParseStream) -> syn::Result<Punctuated<MetaNameValue, Token![,]>> {
-    Punctuated::parse_terminated(input)
-}
-
 /// viewtype! { ... }
 #[proc_macro]
 pub fn viewtype(item: proc_macro::TokenStream) -> proc_macro::TokenStream {

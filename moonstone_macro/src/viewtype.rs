@@ -19,8 +19,8 @@ pub struct ViewDef {
 pub enum ViewType {
     Struct {
         name: Ident,
-        base: Type,
         body: Punctuated<ViewField, Token![,]>,
+        base: Box<Type>,
     },
     Enum {
         name: Ident,
@@ -46,11 +46,10 @@ impl Parse for ViewDef {
         if input.peek(Token![struct]) {
             input.parse::<Token![struct]>()?;
             let name = input.parse()?;
-            input.parse::<Token![:]>()?;
-            let base = input.parse()?;
             let inner;
             braced!(inner in input);
             let body = Punctuated::parse_terminated(&inner)?;
+            let base = input.parse()?;
             Ok(ViewDef {
                 vis,
                 typ: ViewType::Struct { name, base, body },
@@ -112,14 +111,16 @@ impl Parse for ViewField {
 struct DataCollect {
     pub init_struct_fields: TokenStream,
     pub view_struct_fields: TokenStream,
-    pub build_view_values: TokenStream,
+    pub build_proc: TokenStream,
     pub build_fields: TokenStream,
+    pub impls: TokenStream,
 }
 
 fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect) {
     for field in list {
         let vis = &field.vis;
         let name = &field.name;
+        let priv_name = format_ident!("__DONT_USE_THIS_DIRECTLY_{}", name);
 
         let typ = &field.typ;
         match (field.view, &field.body) {
@@ -128,15 +129,20 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
                 // if *name != "__" {
                 data.init_struct_fields.extend(quote! { #vis #name: #typ, });
                 data.view_struct_fields
-                    .extend(quote! { #vis #name: ::moonstone::ViewValue<#typ>, });
+                    .extend(quote! { #vis #priv_name: ::moonstone::ViewValue<#typ>, });
 
-                data.build_view_values.extend(quote! {
+                data.build_proc.extend(quote! {
                     stringify!(#kw);
-                    let __state = <#typ as ::moonstone::View>::build(&self.#name, __parent.clone().upcast(), ::moonstone::AnchorType::ChildOf);
-                    let #name = ::moonstone::ViewValue::create(self.#name, __state);
+                    let __state = <#typ as ::moonstone::View>::build(&self.#name, &mut __parent);
+                    let #name = ::moonstone::ViewValue::__create(self.#name, __state);
                 });
                 data.build_fields.extend(quote! {
-                    #name,
+                    #priv_name: #name,
+                });
+                data.impls.extend(quote! {
+                    #vis fn #name<'a>(&'a self) -> <#typ as ::moonstone::View>::Access<'a> {
+                        <#typ as ::moonstone::View>::access(self.#priv_name.__value())
+                    }
                 });
                 // }
             }
@@ -150,27 +156,29 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
                 // }
             }
             (_, Some(body)) => {
-                // if *name != "__" {
-                data.init_struct_fields
-                    .extend(quote! { #vis #name: ::godot::obj::Gd<#typ>, });
                 data.view_struct_fields
-                    .extend(quote! { #vis #name: ::godot::obj::Gd<#typ>, });
-                // }
+                    .extend(quote! { #vis #priv_name: ::godot::obj::Gd<#typ>, });
 
-                data.build_view_values.extend(quote! {
-                    __parent.add_child(&self.#name);
-                    let mut __parent = self.#name.clone();
+                data.build_proc.extend(quote! {
+                    let #name = #typ::new_alloc();
+                    __parent.node().add_child(&#name);
+                    let mut __parent = ::moonstone::ChildAnchor::new(#name.clone().upcast());
                 });
                 // if *name != "__" {
                 data.build_fields.extend(quote! {
-                    #name: self.#name,
+                    #priv_name: #name,
                 });
                 // }
 
                 collect_data(body, data);
 
-                data.build_view_values.extend(quote! {
-                    let mut __parent = __parent.get_parent().unwrap();
+                data.build_proc.extend(quote! {
+                    let mut __parent = ::moonstone::ChildAnchor::new(__parent.node().get_parent().unwrap());
+                });
+                data.impls.extend(quote! {
+                    #vis fn #name(&self) -> ::godot::obj::Gd<#typ> {
+                        self.#priv_name.clone()
+                    }
                 });
             }
         };
@@ -185,25 +193,28 @@ impl ViewDef {
                 let mut collect = DataCollect {
                     init_struct_fields: quote! {},
                     view_struct_fields: quote! {},
-                    build_view_values: quote! {},
+                    build_proc: quote! {},
                     build_fields: quote! {},
+                    impls: quote! {},
                 };
 
                 collect_data(body, &mut collect);
 
-                let mod_name = format_ident!("_def_{}", name);
+                let mod_name = format_ident!("_mod_{}", name);
                 let init_struct_name = format_ident!("{}_Init", name);
                 let DataCollect {
                     init_struct_fields,
                     view_struct_fields,
-                    build_view_values,
+                    build_proc,
                     build_fields,
+                    impls,
                 } = collect;
 
                 quote! {
 
                     #[derive(::godot::prelude::GodotClass)]
                     #[class(base=#base, no_init)]
+                    #[allow(non_snake_case)]
                     #vis struct #name {
                         base: ::godot::obj::Base<#base>,
                         #view_struct_fields
@@ -213,30 +224,25 @@ impl ViewDef {
                         #init_struct_fields
                     }
 
-                    #[doc(hidden)]
-                    #[allow(non_snake_case)]
-                    mod #mod_name {
-                        use super::*;
-                        use std::rc::{Rc, Weak};
-                        use std::cell::{RefCell, Ref, RefMut};
-
-
-                        impl #init_struct_name {
-                            pub fn build(self) -> ::godot::obj::Gd<#name> {
-                                use ::godot::obj::NewAlloc;
-                                let out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base>| {
-                                    let mut __parent = __base.to_init_gd();
-                                    #build_view_values
-                                    #name {
-                                        base: __base,
-                                        #build_fields
-                                    }
-                                });
-                                // <#name as ::moonstone::CustomView>::init(&mut *out.borrow_mut());
-                                // <#name as ::moonstone::CustomView>::sync(&mut *out.borrow_mut());
-                                out
-                            }
+                    impl #init_struct_name {
+                        pub fn build(self) -> ::godot::obj::Gd<#name> {
+                            use ::moonstone::Anchor;
+                            use ::godot::obj::NewAlloc;
+                            let mut out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base>| {
+                                let mut __parent = ::moonstone::ChildAnchor::new(__base.to_init_gd().upcast());
+                                #build_proc
+                                #name {
+                                    base: __base,
+                                    #build_fields
+                                }
+                            });
+                            <#name as ::moonstone::CustomView>::init(&mut *out.bind_mut());
+                            // <#name as ::moonstone::CustomView>::sync(&mut *out.borrow_mut());
+                            out
                         }
+                    }
+                    impl #name {
+                        #impls
                     }
                 }
             }
@@ -254,9 +260,9 @@ impl ViewDef {
                     let typ = &i.typ;
                     variant_gen.extend(quote! { #variant(#typ), });
                     view_state_variant_gen
-                        .extend(quote! { #variant(::moonstone::ViewState<#typ>), });
+                        .extend(quote! { #variant(<#typ as ::moonstone::View>::State), });
                     build_match.extend(quote! {
-                        #name::#variant(v) => #view_state_name::#variant(v.build(enum_anchor.clone(), ::moonstone::AnchorType::Before)),
+                        #name::#variant(v) => #view_state_name::#variant(v.build(enum_anchor)),
                     });
                     rebuild_match.extend(quote! {
                         (#name::#variant(new), #view_state_name::#variant(inner_state)) => {
@@ -266,12 +272,12 @@ impl ViewDef {
                     });
                     teardown_match.extend(quote! {
                         #view_state_name::#variant(inner_state) => {
-                            ::moonstone::View::teardown(inner_state);
+                            <#typ as ::moonstone::View>::teardown(inner_state, enum_anchor);
                         },
                     });
                     collect_match.extend(quote! {
                         #view_state_name::#variant(inner_state) => {
-                            ::moonstone::View::collect_nodes(inner_state, nodes);
+                            <#typ as ::moonstone::View>::collect_nodes(inner_state, nodes);
                         },
                     });
                 }
@@ -284,60 +290,61 @@ impl ViewDef {
                         #view_state_variant_gen
                     }
                     impl ::moonstone::View for #name {
-                        type State = (::godot::obj::Gd<::godot::classes::Node>, #view_state_name);
+                        type State = (::moonstone::BeforeAnchor, #view_state_name);
+                        type Access<'a> = &'a Self where Self: 'a;
 
-                        fn build(
-                            &self,
-                            mut parent_anchor: ::godot::obj::Gd<::godot::classes::Node>,
-                            parent_anchor_type: ::moonstone::AnchorType,
-                        ) -> ::moonstone::ViewState<Self> {
-                            let enum_anchor = <::godot::classes::Node as ::godot::obj::NewAlloc>::new_alloc();
-                            parent_anchor_type.add(&mut parent_anchor, &enum_anchor);
+                        fn build(&self, parent_anchor: &mut dyn ::moonstone::Anchor) -> Self::State {
+                            use ::moonstone::Anchor;
+                            let mut enum_anchor_owned = <::moonstone::BeforeAnchor as ::moonstone::Anchor>::new(<::godot::classes::Node as ::godot::obj::NewAlloc>::new_alloc());
+                            let enum_anchor = &mut enum_anchor_owned;
+                            parent_anchor.add(&enum_anchor.node());
 
                             let inner_state = match self {
                                 #build_match
                             };
 
-                            ::moonstone::ViewState {
-                                state: (
-                                    enum_anchor,
-                                    inner_state,
-                                ),
-                                parent_anchor,
-                                parent_anchor_type,
-                            }
+                            (
+                                enum_anchor_owned,
+                                inner_state,
+                            )
                         }
 
-                        fn rebuild(&self, state: &mut ::moonstone::ViewState<Self>) {
-                            let enum_anchor = state.state.0.clone();
-                            match (self, &mut state.state.1) {
+                        fn rebuild(&self, state: &mut Self::State) {
+                            use ::moonstone::Anchor;
+                            let enum_anchor = &mut state.0;
+                            match (self, &mut state.1) {
                                 #rebuild_match
                                 _ => {}
                             }
-                            match &mut state.state.1 {
+                            match &mut state.1 {
                                 #teardown_match
                             }
                             let inner_state = match self {
                                 #build_match
                             };
-                            state.state.1 = inner_state;
+                            state.1 = inner_state;
                         }
 
-                        fn teardown(state: &mut ::moonstone::ViewState<Self>) {
-                            match &mut state.state.1 {
+                        fn teardown(state: &mut Self::State, parent_anchor: &mut dyn ::moonstone::Anchor) {
+                            use ::moonstone::Anchor;
+                            let enum_anchor = &mut state.0;
+                            match &mut state.1 {
                                 #teardown_match
                             }
-                            state
-                                .parent_anchor_type
-                                .remove(&mut state.parent_anchor, &state.state.0);
-                            state.state.0.queue_free();
+                            parent_anchor.remove(&state.0.node());
+                            state.0.node().queue_free();
                         }
 
-                        fn collect_nodes(state: &::moonstone::ViewState<Self>, nodes: &mut Vec<::godot::obj::Gd<::godot::classes::Node>>) {
-                            nodes.push(state.state.0.clone());
-                            match &state.state.1 {
+                        fn collect_nodes(state: &Self::State, nodes: &mut Vec<::godot::obj::Gd<::godot::classes::Node>>) {
+                            use ::moonstone::Anchor;
+                            nodes.push(state.0.node());
+                            match &state.1 {
                                 #collect_match
                             }
+                        }
+
+                        fn access<'a>(&'a self) -> Self::Access<'a> {
+                            self
                         }
                     }
                 }

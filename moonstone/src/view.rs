@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::Hash,
     ops::{Deref, DerefMut},
     rc::{Rc, Weak},
@@ -8,169 +8,193 @@ use std::{
 
 use godot::{classes::Button, prelude::*};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AnchorType {
-    ChildOf,
-    Before,
+pub struct ChildAnchor {
+    node: Gd<Node>,
 }
-impl AnchorType {
-    pub fn add(self, anchor: &mut Node, node: &Gd<Node>) {
-        match self {
-            AnchorType::ChildOf => anchor.add_child(node),
-            AnchorType::Before => {
-                let idx = anchor.get_index();
-                let mut parent = anchor.get_parent().unwrap();
-                parent.add_child(node);
-                parent.move_child(node, idx);
-            }
+pub struct BeforeAnchor {
+    node: Gd<Node>,
+    anchored: HashSet<Gd<Node>>,
+}
+pub trait Anchor {
+    fn new(node: Gd<Node>) -> Self
+    where
+        Self: Sized;
+    fn add(&mut self, node: &Gd<Node>);
+    fn remove(&mut self, node: &Gd<Node>);
+    fn node(&self) -> Gd<Node>;
+}
+
+impl Anchor for ChildAnchor {
+    fn add(&mut self, node: &Gd<Node>) {
+        self.node.add_child(node);
+    }
+
+    fn remove(&mut self, node: &Gd<Node>) {
+        self.node.remove_child(node);
+    }
+
+    fn new(node: Gd<Node>) -> Self
+    where
+        Self: Sized,
+    {
+        Self { node }
+    }
+
+    fn node(&self) -> Gd<Node> {
+        self.node.clone()
+    }
+}
+impl Anchor for BeforeAnchor {
+    fn add(&mut self, node: &Gd<Node>) {
+        let idx = self.node.get_index();
+        let mut parent = self.node.get_parent().unwrap();
+        parent.add_child(node);
+        parent.move_child(node, idx);
+    }
+
+    fn remove(&mut self, node: &Gd<Node>) {
+        if self.anchored.remove(node) {
+            self.node.get_parent().unwrap().remove_child(node);
         }
     }
-    pub fn remove(self, anchor: &mut Node, node: &Gd<Node>) {
-        match self {
-            AnchorType::ChildOf => anchor.remove_child(node),
-            AnchorType::Before => anchor.get_parent().unwrap().remove_child(node),
+
+    fn new(node: Gd<Node>) -> Self
+    where
+        Self: Sized,
+    {
+        Self {
+            node,
+            anchored: HashSet::new(),
         }
+    }
+
+    fn node(&self) -> Gd<Node> {
+        self.node.clone()
     }
 }
 
 pub trait View: Sized {
     type State;
+    type Access<'a>
+    where
+        Self: 'a;
 
-    fn build(&self, parent_anchor: Gd<Node>, parent_anchor_type: AnchorType) -> ViewState<Self>;
-    fn rebuild(&self, state: &mut ViewState<Self>);
-    fn teardown(state: &mut ViewState<Self>);
-    fn collect_nodes(state: &ViewState<Self>, nodes: &mut Vec<Gd<Node>>);
-
-    // fn get(state: &Self::State) -> &Self;
-    // fn get_mut(state: &mut Self::State) -> &mut Self;
+    fn build(&self, parent_anchor: &mut dyn Anchor) -> Self::State;
+    fn rebuild(&self, state: &mut Self::State);
+    fn teardown(state: &mut Self::State, parent_anchor: &mut dyn Anchor);
+    fn collect_nodes(state: &Self::State, nodes: &mut Vec<Gd<Node>>);
+    fn access<'a>(&'a self) -> Self::Access<'a>;
 }
 
 pub trait CustomView: Sized {
-    // fn message(&mut self, msg: &M);
     fn init(&mut self);
-    fn sync(&mut self);
 }
 
-pub struct ViewState<T: View> {
-    pub state: T::State,
-    pub parent_anchor: Gd<Node>,
-    pub parent_anchor_type: AnchorType,
-}
 pub struct ViewValue<T: View> {
     pub(crate) value: T,
-    pub(crate) state: ViewState<T>,
-}
-pub struct ViewValueMut<'a, T: View> {
-    pub(crate) inner: &'a mut ViewValue<T>,
+    pub(crate) state: T::State,
 }
 impl<T: View> ViewValue<T> {
-    pub fn create(value: T, state: ViewState<T>) -> Self {
+    #[doc(hidden)]
+    pub fn __create(value: T, state: T::State) -> Self {
         Self { value, state }
     }
-    pub fn get_mut(&mut self) -> ViewValueMut<'_, T> {
-        ViewValueMut { inner: self }
-    }
-}
-impl<T: View> Deref for ViewValue<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
+    #[doc(hidden)]
+    pub fn __value(&self) -> &T {
         &self.value
     }
-}
-impl<'a, T: View> Drop for ViewValueMut<'a, T> {
-    fn drop(&mut self) {
-        self.inner.value.rebuild(&mut self.inner.state);
+    #[doc(hidden)]
+    pub fn __value_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+    #[doc(hidden)]
+    pub fn __rebuild(&mut self) {
+        self.value.rebuild(&mut self.state);
     }
 }
-impl<'a, T: View> Deref for ViewValueMut<'a, T> {
-    type Target = T;
 
-    fn deref(&self) -> &Self::Target {
-        &self.inner.value
-    }
-}
-impl<'a, T: View> DerefMut for ViewValueMut<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner.value
-    }
+pub struct GdViewState<T: Inherits<Node>> {
+    anchor: BeforeAnchor,
+    node: Gd<T>,
 }
 
 impl<T: Inherits<Node>> View for Gd<T> {
-    type State = Gd<T>;
+    type State = GdViewState<T>;
+    type Access<'a> = Self;
 
-    fn build(
-        &self,
-        mut parent_anchor: Gd<Node>,
-        parent_anchor_type: AnchorType,
-    ) -> ViewState<Self> {
-        parent_anchor_type.add(&mut parent_anchor, &self.clone().upcast());
-        ViewState {
-            state: self.clone(),
-            parent_anchor,
-            parent_anchor_type,
+    fn build(&self, parent_anchor: &mut dyn Anchor) -> Self::State {
+        let mut gd_anchor = BeforeAnchor::new(Node::new_alloc());
+        parent_anchor.add(&gd_anchor.node());
+
+        gd_anchor.add(&self.clone().upcast());
+
+        GdViewState {
+            anchor: gd_anchor,
+            node: self.clone(),
         }
     }
 
-    fn rebuild(&self, state: &mut ViewState<Self>) {
-        if self.upcast_ref().get_parent() != state.state.upcast_ref().get_parent() {
-            state.state.upcast_mut().queue_free();
-            state.state.clone().upcast_mut().replace_by(self);
-            state.state = self.clone();
+    fn rebuild(&self, state: &mut Self::State) {
+        if self != &state.node {
+            state.anchor.remove(&state.node.clone().upcast());
+            if let Some(mut parent) = self.upcast_ref().get_parent() {
+                parent.remove_child(self);
+            }
+            state.anchor.add(&self.clone().upcast());
+            state.node = self.clone();
         }
     }
 
-    fn teardown(state: &mut ViewState<Self>) {
-        state
-            .parent_anchor_type
-            .remove(&mut state.parent_anchor, &state.state.clone().upcast());
-        state.state.upcast_mut().queue_free();
+    fn teardown(state: &mut Self::State, parent_anchor: &mut dyn Anchor) {
+        state.anchor.remove(&state.node.clone().upcast());
+        parent_anchor.remove(&state.anchor.node());
+        state.anchor.node().queue_free();
+        state.node.upcast_mut().queue_free();
+        // state.state.upcast_mut().queue_free();
     }
 
-    fn collect_nodes(state: &ViewState<Self>, nodes: &mut Vec<Gd<Node>>) {
-        nodes.push(state.state.clone().upcast());
+    fn collect_nodes(state: &Self::State, nodes: &mut Vec<Gd<Node>>) {
+        nodes.push(state.node.clone().upcast());
+        nodes.push(state.anchor.node());
+    }
+
+    fn access<'a>(&'a self) -> Self::Access<'a> {
+        self.clone()
     }
 }
 
 pub struct OptionViewState<InnerState> {
-    anchor: Gd<Node>,
+    anchor: BeforeAnchor,
     inner_state: Option<InnerState>,
 }
 impl<T: View> View for Option<T> {
-    type State = OptionViewState<ViewState<T>>;
+    type State = OptionViewState<T::State>;
+    type Access<'a>
+        = &'a Self
+    where
+        T: 'a;
 
-    fn build(
-        &self,
-        mut parent_anchor: Gd<Node>,
-        parent_anchor_type: AnchorType,
-    ) -> ViewState<Self> {
-        let opt_anchor = Node::new_alloc();
-        parent_anchor_type.add(&mut parent_anchor, &opt_anchor);
+    fn build(&self, parent_anchor: &mut dyn Anchor) -> Self::State {
+        let mut opt_anchor = BeforeAnchor::new(Node::new_alloc());
+        parent_anchor.add(&opt_anchor.node());
 
-        let inner_state = self
-            .as_ref()
-            .map(|v| v.build(opt_anchor.clone(), AnchorType::Before));
+        let inner_state = self.as_ref().map(|v| v.build(&mut opt_anchor));
 
-        ViewState {
-            state: OptionViewState {
-                anchor: opt_anchor,
-                inner_state,
-            },
-            parent_anchor,
-            parent_anchor_type,
+        OptionViewState {
+            anchor: opt_anchor,
+            inner_state,
         }
     }
 
-    fn rebuild(&self, state: &mut ViewState<Self>) {
-        let opt_anchor = state.state.anchor.clone();
-        match (self, state.state.inner_state.as_mut()) {
+    fn rebuild(&self, state: &mut Self::State) {
+        match (self, state.inner_state.as_mut()) {
             (None, None) => {}
             (None, Some(inner_state)) => {
-                View::teardown(inner_state);
-                state.state.inner_state = None;
+                <T as View>::teardown(inner_state, &mut state.anchor);
+                state.inner_state = None;
             }
             (Some(new), None) => {
-                state.state.inner_state = Some(new.build(opt_anchor, AnchorType::Before));
+                state.inner_state = Some(new.build(&mut state.anchor));
             }
             (Some(new), Some(inner_state)) => {
                 new.rebuild(inner_state);
@@ -178,73 +202,69 @@ impl<T: View> View for Option<T> {
         }
     }
 
-    fn teardown(state: &mut ViewState<Self>) {
-        if let Some(is) = &mut state.state.inner_state {
-            View::teardown(is);
+    fn teardown(state: &mut Self::State, parent_anchor: &mut dyn Anchor) {
+        if let Some(is) = &mut state.inner_state {
+            <T as View>::teardown(is, &mut state.anchor);
         }
-        state
-            .parent_anchor_type
-            .remove(&mut state.parent_anchor, &state.state.anchor);
-        state.state.anchor.queue_free();
+        parent_anchor.remove(&state.anchor.node());
+        state.anchor.node().clone().queue_free();
     }
 
-    fn collect_nodes(state: &ViewState<Self>, nodes: &mut Vec<Gd<Node>>) {
-        nodes.push(state.state.anchor.clone());
-        if let Some(is) = &state.state.inner_state {
-            View::collect_nodes(is, nodes);
+    fn collect_nodes(state: &Self::State, nodes: &mut Vec<Gd<Node>>) {
+        nodes.push(state.anchor.node());
+        if let Some(is) = &state.inner_state {
+            <T as View>::collect_nodes(is, nodes);
         }
+    }
+
+    fn access<'a>(&'a self) -> Self::Access<'a> {
+        self
     }
 }
 
 pub struct VecViewState<K, InnerState> {
-    anchor: Gd<Node>,
+    anchor: BeforeAnchor,
     inner_state: Vec<(K, InnerState)>,
 }
 impl<K: Hash + Eq + Clone, T: View> View for Vec<(K, T)> {
-    type State = VecViewState<K, ViewState<T>>;
+    type State = VecViewState<K, T::State>;
+    type Access<'a>
+        = &'a Self
+    where
+        T: 'a,
+        K: 'a;
 
-    fn build(
-        &self,
-        mut parent_anchor: Gd<Node>,
-        parent_anchor_type: AnchorType,
-    ) -> ViewState<Self> {
-        let vec_anchor = Node::new_alloc();
-        parent_anchor_type.add(&mut parent_anchor, &vec_anchor);
+    fn build(&self, parent_anchor: &mut dyn Anchor) -> Self::State {
+        let mut vec_anchor = BeforeAnchor::new(Node::new_alloc());
+        parent_anchor.add(&vec_anchor.node());
 
         let inner_state = self
             .iter()
-            .map(|(k, v)| (k.clone(), v.build(vec_anchor.clone(), AnchorType::Before)))
+            .map(|(k, v)| (k.clone(), v.build(&mut vec_anchor)))
             .collect::<Vec<_>>();
 
-        ViewState {
-            state: VecViewState {
-                anchor: vec_anchor,
-                inner_state,
-            },
-            parent_anchor,
-            parent_anchor_type,
+        VecViewState {
+            anchor: vec_anchor,
+            inner_state,
         }
     }
 
-    fn rebuild(&self, state: &mut ViewState<Self>) {
-        let vec_anchor = state.state.anchor.clone();
-
+    fn rebuild(&self, state: &mut Self::State) {
         let mut total_nodes = 0;
 
         let mut prev_map = state
-            .state
             .inner_state
             .drain(..)
             .enumerate()
-            .map(|(idx, mut is)| {
+            .map(|(idx, is)| {
                 let mut nodes = vec![];
-                View::collect_nodes(&is.1, &mut nodes);
+                <T as View>::collect_nodes(&is.1, &mut nodes);
                 total_nodes += nodes.len();
                 (is.0, (is.1, nodes))
             })
             .collect::<HashMap<_, _>>();
 
-        let mut move_idx = vec_anchor.get_index() as usize - total_nodes;
+        let mut move_idx = state.anchor.node().get_index() as usize - total_nodes;
         for (k, v) in self {
             if let Some((k, (mut is, nodes))) = prev_map.remove_entry(k) {
                 for node in &nodes {
@@ -253,41 +273,67 @@ impl<K: Hash + Eq + Clone, T: View> View for Vec<(K, T)> {
                 }
                 v.rebuild(&mut is);
                 let mut new_nodes = vec![];
-                View::collect_nodes(&is, &mut new_nodes);
+                <T as View>::collect_nodes(&is, &mut new_nodes);
                 move_idx =
                     (move_idx as isize + new_nodes.len() as isize - nodes.len() as isize) as usize;
-                state.state.inner_state.push((k, is));
+                state.inner_state.push((k, is));
             } else {
-                let is = v.build(vec_anchor.clone(), AnchorType::Before);
+                let is = v.build(&mut state.anchor);
                 let mut nodes = vec![];
-                View::collect_nodes(&is, &mut nodes);
+                <T as View>::collect_nodes(&is, &mut nodes);
                 for node in &nodes {
                     node.get_parent().unwrap().move_child(node, move_idx as i32);
                     move_idx += 1;
                 }
-                state.state.inner_state.push((k.clone(), is));
+                state.inner_state.push((k.clone(), is));
             }
         }
 
         for (_, (mut inner, _)) in prev_map.drain() {
-            View::teardown(&mut inner);
+            <T as View>::teardown(&mut inner, &mut state.anchor);
         }
     }
 
-    fn teardown(state: &mut ViewState<Self>) {
-        for (_, is) in &mut state.state.inner_state {
-            View::teardown(is);
+    fn teardown(state: &mut Self::State, parent_anchor: &mut dyn Anchor) {
+        for (_, is) in &mut state.inner_state {
+            <T as View>::teardown(is, &mut state.anchor);
         }
-        state
-            .parent_anchor_type
-            .remove(&mut state.parent_anchor, &state.state.anchor);
-        state.state.anchor.queue_free();
+        parent_anchor.remove(&state.anchor.node());
+        state.anchor.node().queue_free();
     }
 
-    fn collect_nodes(state: &ViewState<Self>, nodes: &mut Vec<Gd<Node>>) {
-        nodes.push(state.state.anchor.clone());
-        for (_, is) in &state.state.inner_state {
-            View::collect_nodes(is, nodes);
+    fn collect_nodes(state: &Self::State, nodes: &mut Vec<Gd<Node>>) {
+        nodes.push(state.anchor.node());
+        for (_, is) in &state.inner_state {
+            <T as View>::collect_nodes(is, nodes);
         }
     }
+
+    fn access<'a>(&'a self) -> Self::Access<'a> {
+        self
+    }
+}
+
+#[macro_export]
+macro_rules! mutate {
+    ($obj:ident{$($field:ident),* $(,)?}, {
+        $($body:tt)*
+    }) => {
+        {
+            $crate::__paste::paste! {
+                $(
+                    let $field = $obj.[< __DONT_USE_THIS_DIRECTLY_ $field >].__value_mut();
+                )*
+            }
+            let out = {
+                $($body)*
+            };
+            $crate::__paste::paste! {
+                $(
+                    $obj.[< __DONT_USE_THIS_DIRECTLY_ $field >].__rebuild();
+                )*
+            }
+            out
+        }
+    };
 }

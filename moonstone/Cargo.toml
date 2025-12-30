@@ -7,3 +7,4 @@ edition = "2024"
 godot = { workspace = true }
 moonstone_macro = { path = "../moonstone_macro" }
 parking_lot = { workspace = true }
+paste = { workspace = true }
