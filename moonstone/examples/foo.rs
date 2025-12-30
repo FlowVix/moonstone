@@ -14,10 +14,10 @@ viewtype! {
 }
 
 viewtype! {
-    struct Bar {
+    struct Bar: VBoxContainer {
         pub view a: Gd<Button>,
         pub view b: Gd<Button>,
-    } VBoxContainer
+    }
 }
 
 impl CustomView for Bar {
@@ -30,6 +30,18 @@ impl CustomView for Bar {
         // mutate(self).a().b().
     }
 }
+use godot::prelude::*;
+
+#[derive(GodotClass)]
+#[class(base=Node, no_init)]
+struct Gang {
+    base: Base<Node>,
+}
+fn lol() {
+    // Gd::fro
+}
+// fn lol(v: Gang) {
+// }
 
 // struct Foo {
 //     v: String,

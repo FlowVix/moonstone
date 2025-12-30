@@ -19,8 +19,8 @@ pub struct ViewDef {
 pub enum ViewType {
     Struct {
         name: Ident,
-        body: Punctuated<ViewField, Token![,]>,
         base: Box<Type>,
+        body: Punctuated<ViewField, Token![,]>,
     },
     Enum {
         name: Ident,
@@ -46,10 +46,11 @@ impl Parse for ViewDef {
         if input.peek(Token![struct]) {
             input.parse::<Token![struct]>()?;
             let name = input.parse()?;
+            input.parse::<Token![:]>()?;
+            let base = input.parse()?;
             let inner;
             braced!(inner in input);
             let body = Punctuated::parse_terminated(&inner)?;
-            let base = input.parse()?;
             Ok(ViewDef {
                 vis,
                 typ: ViewType::Struct { name, base, body },
@@ -111,7 +112,7 @@ impl Parse for ViewField {
 struct DataCollect {
     pub init_struct_fields: TokenStream,
     pub view_struct_fields: TokenStream,
-    pub build_proc: TokenStream,
+    pub build_view_values: TokenStream,
     pub build_fields: TokenStream,
     pub impls: TokenStream,
 }
@@ -131,7 +132,7 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
                 data.view_struct_fields
                     .extend(quote! { #vis #priv_name: ::moonstone::ViewValue<#typ>, });
 
-                data.build_proc.extend(quote! {
+                data.build_view_values.extend(quote! {
                     stringify!(#kw);
                     let __state = <#typ as ::moonstone::View>::build(&self.#name, &mut __parent);
                     let #name = ::moonstone::ViewValue::__create(self.#name, __state);
@@ -159,7 +160,7 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
                 data.view_struct_fields
                     .extend(quote! { #vis #priv_name: ::godot::obj::Gd<#typ>, });
 
-                data.build_proc.extend(quote! {
+                data.build_view_values.extend(quote! {
                     let #name = #typ::new_alloc();
                     __parent.node().add_child(&#name);
                     let mut __parent = ::moonstone::ChildAnchor::new(#name.clone().upcast());
@@ -172,7 +173,7 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
 
                 collect_data(body, data);
 
-                data.build_proc.extend(quote! {
+                data.build_view_values.extend(quote! {
                     let mut __parent = ::moonstone::ChildAnchor::new(__parent.node().get_parent().unwrap());
                 });
                 data.impls.extend(quote! {
@@ -193,7 +194,7 @@ impl ViewDef {
                 let mut collect = DataCollect {
                     init_struct_fields: quote! {},
                     view_struct_fields: quote! {},
-                    build_proc: quote! {},
+                    build_view_values: quote! {},
                     build_fields: quote! {},
                     impls: quote! {},
                 };
@@ -205,7 +206,7 @@ impl ViewDef {
                 let DataCollect {
                     init_struct_fields,
                     view_struct_fields,
-                    build_proc,
+                    build_view_values,
                     build_fields,
                     impls,
                 } = collect;
@@ -230,7 +231,7 @@ impl ViewDef {
                             use ::godot::obj::NewAlloc;
                             let mut out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base>| {
                                 let mut __parent = ::moonstone::ChildAnchor::new(__base.to_init_gd().upcast());
-                                #build_proc
+                                #build_view_values
                                 #name {
                                     base: __base,
                                     #build_fields
