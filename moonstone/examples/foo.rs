@@ -4,7 +4,7 @@ use godot::{
     classes::{Button, LineEdit, Node, PanelContainer, VBoxContainer},
     obj::{Gd, WithBaseField},
 };
-use moonstone::{CustomView, ViewValue, mutate, viewtype};
+use moonstone::{ViewValue, mutate, viewtype};
 
 viewtype! {
     enum Guy {
@@ -20,16 +20,16 @@ viewtype! {
     }
 }
 
-impl CustomView for Bar {
-    fn init(&mut self) {
-        mutate!(self { a, b }, {
-            swap(a, b);
-        })
-        // self.peeenis()
-        // self.p
-        // mutate(self).a().b().
-    }
-}
+// impl CustomView for Bar {
+//     fn init(&mut self) {
+//         mutate!(self { a, b }, {
+//             swap(a, b);
+//         })
+//         // self.peeenis()
+//         // self.p
+//         // mutate(self).a().b().
+//     }
+// }
 use godot::prelude::*;
 
 #[derive(GodotClass)]

@@ -86,9 +86,9 @@ pub trait View: Sized {
     fn access<'a>(&'a self) -> Self::Access<'a>;
 }
 
-pub trait CustomView: Sized {
-    fn init(&mut self);
-}
+// pub trait CustomView: Sized {
+//     fn init(&mut self);
+// }
 
 pub struct ViewValue<T: View> {
     pub(crate) value: T,

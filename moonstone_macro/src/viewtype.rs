@@ -240,7 +240,7 @@ impl ViewDef {
                                 }
                             });
                             // f(&mut *out.bind_mut());
-                            <#name as ::moonstone::CustomView>::init(&mut *out.bind_mut());
+                            // <#name as ::moonstone::CustomView>::init(&mut *out.bind_mut());
 
                             out
                         }
