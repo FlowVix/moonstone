@@ -134,8 +134,8 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
 
                 data.build_view_values.extend(quote! {
                     stringify!(#kw);
-                    let __state = <#typ as ::moonstone::View>::build(&self.#name, &mut __parent);
-                    let #name = ::moonstone::ViewValue::__create(self.#name, __state);
+                    let __state = <#typ as ::moonstone::View>::build(&__init.#name, &mut __parent);
+                    let #name = ::moonstone::ViewValue::__create(__init.#name, __state);
                 });
                 data.build_fields.extend(quote! {
                     #priv_name: #name,
@@ -225,28 +225,26 @@ impl ViewDef {
                         #init_struct_fields
                     }
 
-                    impl #init_struct_name {
-                        pub fn build_and(self, f: impl FnOnce(&mut #name)) -> ::godot::obj::Gd<#name> {
+                    impl #name {
+                        pub fn build(f: impl FnOnce(&mut ::godot::obj::Gd<#base>) -> #init_struct_name) -> ::godot::obj::Gd<#name> {
                             use ::moonstone::Anchor;
                             use ::godot::obj::NewAlloc;
                             let mut out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base>| {
-                                let mut __parent = ::moonstone::ChildAnchor::new(__base.to_init_gd().upcast());
+                                let mut __node = __base.to_init_gd();
+                                let __init = f(&mut __node);
+                                let mut __parent = ::moonstone::ChildAnchor::new(__node.upcast());
                                 #build_view_values
                                 #name {
                                     base: __base,
                                     #build_fields
                                 }
                             });
-                            f(&mut *out.bind_mut());
+                            // f(&mut *out.bind_mut());
                             <#name as ::moonstone::CustomView>::init(&mut *out.bind_mut());
 
                             out
                         }
-                        pub fn build(self) -> ::godot::obj::Gd<#name> {
-                            self.build_and(|_| {})
-                        }
-                    }
-                    impl #name {
+
                         #impls
                     }
                 }

@@ -38,6 +38,10 @@ struct Gang {
     base: Base<Node>,
 }
 fn lol() {
+    // Bar::build(|this| Bar_Init {
+    //     a: Button::new_alloc(),
+    //     b: Button::new_alloc(),
+    // });
     // Gd::fro
 }
 // fn lol(v: Gang) {
