@@ -226,7 +226,7 @@ impl ViewDef {
                     }
 
                     impl #init_struct_name {
-                        pub fn build(self) -> ::godot::obj::Gd<#name> {
+                        pub fn build_and(self, f: impl FnOnce(&mut #name)) -> ::godot::obj::Gd<#name> {
                             use ::moonstone::Anchor;
                             use ::godot::obj::NewAlloc;
                             let mut out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base>| {
@@ -237,9 +237,13 @@ impl ViewDef {
                                     #build_fields
                                 }
                             });
+                            f(&mut *out.bind_mut());
                             <#name as ::moonstone::CustomView>::init(&mut *out.bind_mut());
-                            // <#name as ::moonstone::CustomView>::sync(&mut *out.borrow_mut());
+
                             out
+                        }
+                        pub fn build(self) -> ::godot::obj::Gd<#name> {
+                            self.build_and(|_| {})
                         }
                     }
                     impl #name {
@@ -287,7 +291,7 @@ impl ViewDef {
                         #variant_gen
                     }
                     #[allow(non_camel_case_types)]
-                    enum #view_state_name {
+                    #vis enum #view_state_name {
                         #view_state_variant_gen
                     }
                     impl ::moonstone::View for #name {
