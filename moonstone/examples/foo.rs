@@ -16,7 +16,9 @@ viewtype! {
 viewtype! {
     struct Bar: VBoxContainer {
         pub view a: Gd<Button>,
-        pub view b: Gd<Button>,
+        lol: Button {
+            pub view b: Gd<Button>,
+        }
     }
 }
 
@@ -38,10 +40,10 @@ struct Gang {
     base: Base<Node>,
 }
 fn lol() {
-    // Bar::build(|this| Bar_Init {
-    //     a: Button::new_alloc(),
-    //     b: Button::new_alloc(),
-    // });
+    Bar::build(|this| Bar_Init {
+        a: Button::new_alloc(),
+        b: Button::new_alloc(),
+    });
     // Gd::fro
 }
 // fn lol(v: Gang) {
