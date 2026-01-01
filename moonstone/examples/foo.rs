@@ -16,7 +16,7 @@ viewtype! {
 viewtype! {
     struct Bar: VBoxContainer {
         pub view a: Gd<Button>,
-        lol: Button {
+        view lol: Button {
             pub view b: Gd<Button>,
         }
     }

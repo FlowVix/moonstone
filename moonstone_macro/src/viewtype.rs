@@ -156,13 +156,19 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
                 });
                 // }
             }
-            (_, Some(body)) => {
+            (kw, Some(body)) => {
+                let Some(kw) = kw else {
+                    panic!("Bruuuhhh put view there");
+                };
+                let kw = Ident::new("try", kw.span);
+
                 data.init_struct_fields
                     .extend(quote! { #vis #name: ::godot::obj::Gd<#typ>, });
                 data.view_struct_fields
                     .extend(quote! { #vis #priv_name: ::godot::obj::Gd<#typ>, });
 
                 data.build_view_values.extend(quote! {
+                    stringify!(#kw);
                     __parent.node().add_child(&__init.#name);
                     let mut __parent = ::moonstone::ChildAnchor::new(__init.#name.clone().upcast());
                 });
