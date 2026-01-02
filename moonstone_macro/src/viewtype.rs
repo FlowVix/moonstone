@@ -134,8 +134,8 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
 
                 data.build_view_values.extend(quote! {
                     stringify!(#kw);
-                    let __state = <#typ as ::moonstone::View>::build(&__init.#name, &mut __parent);
-                    let #name = ::moonstone::ViewValue::__create(__init.#name, __state);
+                    let __state = <#typ as ::moonstone::View>::build(&self.#name, &mut __parent);
+                    let #name = ::moonstone::ViewValue::__create(self.#name, __state);
                 });
                 data.build_fields.extend(quote! {
                     #priv_name: #name,
@@ -169,12 +169,12 @@ fn collect_data(list: &Punctuated<ViewField, Token![,]>, data: &mut DataCollect)
 
                 data.build_view_values.extend(quote! {
                     stringify!(#kw);
-                    __parent.node().add_child(&__init.#name);
-                    let mut __parent = ::moonstone::ChildAnchor::new(__init.#name.clone().upcast());
+                    __parent.node().add_child(&self.#name);
+                    let mut __parent = ::moonstone::ChildAnchor::new(self.#name.clone().upcast());
                 });
                 // if *name != "__" {
                 data.build_fields.extend(quote! {
-                    #priv_name: __init.#name,
+                    #priv_name: self.#name,
                 });
                 // }
 
@@ -232,13 +232,12 @@ impl ViewDef {
                         #init_struct_fields
                     }
 
-                    impl #name {
-                        pub fn build(f: impl FnOnce(&mut ::godot::obj::Gd<#base>) -> #init_struct_name) -> ::godot::obj::Gd<#name> {
+                    impl #init_struct_name {
+                        pub fn build(self, f: impl FnOnce(&mut ::godot::obj::Gd<#name>)) -> ::godot::obj::Gd<#name> {
                             use ::moonstone::Anchor;
                             use ::godot::obj::NewAlloc;
                             let mut out = ::godot::obj::Gd::from_init_fn(|__base: ::godot::obj::Base<#base>| {
                                 let mut __node = __base.to_init_gd();
-                                let __init = f(&mut __node);
                                 let mut __parent = ::moonstone::ChildAnchor::new(__node.upcast());
                                 #build_view_values
                                 #name {
@@ -251,7 +250,8 @@ impl ViewDef {
 
                             out
                         }
-
+                    }
+                    impl #name {
                         #impls
                     }
                 }
